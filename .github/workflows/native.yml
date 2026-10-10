@@ -25,8 +25,8 @@ jobs:
         os: [ubuntu-24.04, ubuntu-24.04-arm, macos-14, macos-15-intel, windows-2022, windows-11-arm]
     runs-on: ${{ matrix.os }}
     env:
-      SEED: ${{ inputs.seed || '0.1.0-rc.3' }}
-      CANDIDATE: ${{ inputs.candidate || '0.1.0-rc.4' }}
+      SEED: ${{ inputs.seed || '0.1.1-rc.1' }}
+      CANDIDATE: ${{ inputs.candidate || '0.1.1-rc.2' }}
     steps:
       - name: Install update rollback on Unix
         if: runner.os != 'Windows'
@@ -65,17 +65,27 @@ jobs:
           $installer = Join-Path $env:RUNNER_TEMP 'install-falk.ps1'
           Invoke-WebRequest -Uri "https://github.com/bai-os/falk-releases/releases/download/v$env:SEED/install.ps1" -OutFile $installer
           & $installer
-          Get-Acl $env:FALK_INSTALL_DIR | Select-Object Owner, Sddl | Format-List
-          Get-Acl $env:LOCALAPPDATA | Select-Object Owner, Sddl | Format-List
-          whoami /user
           $falk = Join-Path $env:FALK_INSTALL_DIR 'falk.exe'
           & $falk version
-          & $falk update --version $env:CANDIDATE
+          # A temporary scanner-style handle forbids rename until released.
+          $handle = [IO.File]::Open($falk, 'Open', 'Read', 'Read')
+          try {
+            $update = Start-Process $falk -ArgumentList @('update', '--version', $env:CANDIDATE) -PassThru -RedirectStandardOutput (Join-Path $env:RUNNER_TEMP 'locked-update.out') -RedirectStandardError (Join-Path $env:RUNNER_TEMP 'locked-update.err')
+            Start-Sleep -Milliseconds 500
+          } finally { $handle.Dispose() }
+          $update.WaitForExit()
+          Get-Content (Join-Path $env:RUNNER_TEMP 'locked-update.out')
+          if ($update.ExitCode -ne 0) { throw 'Bounded locked-image update failed' }
           $probe = (& $falk version) | ConvertFrom-Json
           if ($probe.version -ne $env:CANDIDATE) { throw 'Candidate version mismatch' }
           & $falk update --version $env:SEED
           $probe = (& $falk version) | ConvertFrom-Json
           if ($probe.version -ne $env:SEED) { throw 'Rollback version mismatch' }
           if ((Get-FileHash $config).Hash -ne $original) { throw 'Configuration changed' }
+          foreach ($i in 1..5) {
+            & $falk update --version $env:CANDIDATE
+            & $falk update --version $env:SEED
+          }
           & $falk update --version $env:CANDIDATE
           & $falk update --check --version $env:CANDIDATE
+          if ((Get-FileHash $config).Hash -ne $original) { throw 'Configuration changed during repeated updates' }
