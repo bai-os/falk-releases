@@ -1,0 +1,74 @@
+name: native install update rollback
+on:
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: Seed release version
+        type: string
+        required: true
+      candidate:
+        description: Candidate release version
+        type: string
+        required: true
+permissions:
+  contents: read
+jobs:
+  native:
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-14, macos-15-intel, windows-2022, windows-11-arm]
+    runs-on: ${{ matrix.os }}
+    env:
+      SEED: ${{ inputs.seed }}
+      CANDIDATE: ${{ inputs.candidate }}
+    steps:
+      - name: Install update rollback on Unix
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for version in "$SEED" "$CANDIDATE"; do [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; done
+          export FALK_INSTALL_DIR="$RUNNER_TEMP/falk-native/bin"
+          export FALK_CONFIG_DIR="$RUNNER_TEMP/falk-native/profile"
+          mkdir -p "$FALK_CONFIG_DIR"
+          printf '%s' '{"sentinel":"configuration-preserved"}' > "$FALK_CONFIG_DIR/credentials.json"
+          cp "$FALK_CONFIG_DIR/credentials.json" "$RUNNER_TEMP/original-config.json"
+          curl -q --proto '=https' --proto-redir '=https' -fsSL "https://github.com/bai-os/falk-releases/releases/download/v$SEED/install.sh" | sh
+          falk="$FALK_INSTALL_DIR/falk"
+          "$falk" version
+          "$falk" update --version "$CANDIDATE"
+          [[ "$("$falk" version)" == "{\"apiVersion\":\"v1\",\"name\":\"falk\",\"version\":\"$CANDIDATE\"}" ]]
+          "$falk" update --version "$SEED"
+          [[ "$("$falk" version)" == "{\"apiVersion\":\"v1\",\"name\":\"falk\",\"version\":\"$SEED\"}" ]]
+          cmp "$FALK_CONFIG_DIR/credentials.json" "$RUNNER_TEMP/original-config.json"
+          "$falk" update --version "$CANDIDATE"
+          "$falk" update --check --version "$CANDIDATE"
+      - name: Install update rollback on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          foreach ($v in @($env:SEED, $env:CANDIDATE)) { if ($v -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$') { throw 'Invalid version' } }
+          $env:FALK_INSTALL_DIR = Join-Path $env:RUNNER_TEMP 'falk-native/bin'
+          $env:FALK_CONFIG_DIR = Join-Path $env:RUNNER_TEMP 'falk-native/profile'
+          New-Item -ItemType Directory -Force $env:FALK_CONFIG_DIR | Out-Null
+          $config = Join-Path $env:FALK_CONFIG_DIR 'credentials.json'
+          [IO.File]::WriteAllText($config, '{"sentinel":"configuration-preserved"}')
+          $original = (Get-FileHash $config).Hash
+          $installer = Join-Path $env:RUNNER_TEMP 'install-falk.ps1'
+          Invoke-WebRequest -Uri "https://github.com/bai-os/falk-releases/releases/download/v$env:SEED/install.ps1" -OutFile $installer
+          & $installer
+          $falk = Join-Path $env:FALK_INSTALL_DIR 'falk.exe'
+          & $falk version
+          & $falk update --version $env:CANDIDATE
+          $probe = (& $falk version) | ConvertFrom-Json
+          if ($probe.version -ne $env:CANDIDATE) { throw 'Candidate version mismatch' }
+          & $falk update --version $env:SEED
+          $probe = (& $falk version) | ConvertFrom-Json
+          if ($probe.version -ne $env:SEED) { throw 'Rollback version mismatch' }
+          if ((Get-FileHash $config).Hash -ne $original) { throw 'Configuration changed' }
+          & $falk update --version $env:CANDIDATE
+          & $falk update --check --version $env:CANDIDATE
