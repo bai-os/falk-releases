@@ -65,6 +65,9 @@ jobs:
           $installer = Join-Path $env:RUNNER_TEMP 'install-falk.ps1'
           Invoke-WebRequest -Uri "https://github.com/bai-os/falk-releases/releases/download/v$env:SEED/install.ps1" -OutFile $installer
           & $installer
+          Get-Acl $env:FALK_INSTALL_DIR | Select-Object Owner, Sddl | Format-List
+          Get-Acl $env:LOCALAPPDATA | Select-Object Owner, Sddl | Format-List
+          whoami /user
           $falk = Join-Path $env:FALK_INSTALL_DIR 'falk.exe'
           & $falk version
           & $falk update --version $env:CANDIDATE
