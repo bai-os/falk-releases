@@ -1,5 +1,9 @@
 name: native install update rollback
 on:
+  pull_request:
+  push:
+    branches: [main]
+    paths: [.github/workflows/native.yml]
   workflow_dispatch:
     inputs:
       seed:
@@ -21,8 +25,8 @@ jobs:
         os: [ubuntu-24.04, ubuntu-24.04-arm, macos-14, macos-15-intel, windows-2022, windows-11-arm]
     runs-on: ${{ matrix.os }}
     env:
-      SEED: ${{ inputs.seed }}
-      CANDIDATE: ${{ inputs.candidate }}
+      SEED: ${{ inputs.seed || '0.1.0-rc.3' }}
+      CANDIDATE: ${{ inputs.candidate || '0.1.0-rc.4' }}
     steps:
       - name: Install update rollback on Unix
         if: runner.os != 'Windows'
@@ -61,6 +65,9 @@ jobs:
           $installer = Join-Path $env:RUNNER_TEMP 'install-falk.ps1'
           Invoke-WebRequest -Uri "https://github.com/bai-os/falk-releases/releases/download/v$env:SEED/install.ps1" -OutFile $installer
           & $installer
+          Get-Acl $env:FALK_INSTALL_DIR | Select-Object Owner, Sddl | Format-List
+          Get-Acl $env:LOCALAPPDATA | Select-Object Owner, Sddl | Format-List
+          whoami /user
           $falk = Join-Path $env:FALK_INSTALL_DIR 'falk.exe'
           & $falk version
           & $falk update --version $env:CANDIDATE
