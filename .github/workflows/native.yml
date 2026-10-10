@@ -71,7 +71,13 @@ jobs:
           $handle = [IO.File]::Open($falk, 'Open', 'Read', 'Read')
           try {
             $update = Start-Process $falk -ArgumentList @('update', '--version', $env:CANDIDATE) -PassThru -RedirectStandardOutput (Join-Path $env:RUNNER_TEMP 'locked-update.out') -RedirectStandardError (Join-Path $env:RUNNER_TEMP 'locked-update.err')
+            $deadline = [DateTime]::UtcNow.AddSeconds(30)
+            while (-not (Get-ChildItem $env:FALK_INSTALL_DIR -Filter '.falk-update-*.exe')) {
+              if ($update.HasExited -or [DateTime]::UtcNow -gt $deadline) { throw 'Update never reached staging under the lock' }
+              Start-Sleep -Milliseconds 50
+            }
             Start-Sleep -Milliseconds 500
+            if ($update.HasExited) { throw 'Update exited instead of waiting for the held image lock' }
           } finally { $handle.Dispose() }
           $update.WaitForExit()
           Get-Content (Join-Path $env:RUNNER_TEMP 'locked-update.out')
